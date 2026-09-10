@@ -1,85 +1,24 @@
-THYHEROOFTIME SOFTWARE LICENSE
-Copyright (c) 2026 ThyHeroOfTime
-All Rights Reserved.
+This is free and unencumbered software released into the public domain.
 
-Tears of the Kingdom 1.2.1 Save Converter
-Version 2.67
+Anyone is free to copy, modify, publish, use, compile, sell, or
+distribute this software, either in source code form or as a compiled
+binary, for any purpose, commercial or non-commercial, and by any
+means.
 
-1. OWNERSHIP OF ORIGINAL SOFTWARE
-
-The original source code, application logic, documentation, and other
-original material created specifically for this project are copyrighted
-by ThyHeroOfTime, except where otherwise stated or where material is
-owned by a third party.
-
-All rights not expressly granted by this license are reserved.
-
-2. PERSONAL USE
-
-Permission is granted to download and use the compiled application
-for personal, non-commercial purposes.
-
-3. SOURCE CODE RESTRICTIONS
-
-Unless prior written permission is obtained from ThyHeroOfTime, you
-may not redistribute, republish, sell, sublicense, or claim authorship
-of the original source code contained in this project.
-
-You may not remove or alter copyright notices or falsely represent
-yourself or another person as the original creator of this software.
-
-4. THIRD-PARTY INTELLECTUAL PROPERTY
-
-This license applies only to original material for which
-ThyHeroOfTime owns the applicable rights.
-
-Nintendo, The Legend of Zelda, The Legend of Zelda: Tears of the
-Kingdom, and related names, characters, trademarks, game content,
-artwork, audio, and other intellectual property belong to their
-respective rights holders.
-
-No ownership of Nintendo intellectual property is claimed by
-ThyHeroOfTime under this license.
-
-Third-party components, if any, remain subject to their respective
-copyrights and licenses.
-
-5. INDEPENDENT FAN-MADE PROJECT
-
-This software is an independent, unofficial fan-made utility.
-
-It is not produced, sponsored, licensed, approved, endorsed, or
-affiliated with Nintendo Co., Ltd., Nintendo of America Inc., or any
-of their affiliates.
-
-6. NO NINTENDO GAME CONTENT PROVIDED
-
-This project is intended as a utility for working with save data
-lawfully possessed by the user.
-
-This license does not grant permission to distribute copyrighted
-game software, ROMs, firmware, encryption keys, music, artwork,
-audio, or other proprietary Nintendo content.
-
-Users are responsible for ensuring that their use of this software
-and any files used with it complies with applicable law and the
-rights of third parties.
-
-7. NO WARRANTY
+In jurisdictions that recognize copyright laws, the author or authors
+of this software dedicate any and all copyright interest in the
+software to the public domain. We make this dedication for the benefit
+of the public at large and to the detriment of our heirs and
+successors. We intend this dedication to be an overt act of
+relinquishment in perpetuity of all present and future rights to this
+software under copyright law.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
-NONINFRINGEMENT.
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
 
-TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE AUTHOR SHALL NOT BE
-LIABLE FOR DATA LOSS, CORRUPTED SAVE DATA, OR OTHER DAMAGES ARISING
-FROM THE USE OR INABILITY TO USE THIS SOFTWARE.
-
-8. RESERVATION OF RIGHTS
-
-Nothing in this license grants any rights in intellectual property
-owned by Nintendo or any other third party.
-
-Copyright (c) 2026 ThyHeroOfTime.
-All Rights Reserved.
+For more information, please refer to <https://unlicense.org>
