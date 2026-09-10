@@ -1,0 +1,39 @@
+THIRD-PARTY NOTICES
+Tears of the Kingdom 1.2.1 Save Converter v2.67
+
+NINTENDO
+Nintendo, The Legend of Zelda, The Legend of Zelda: Tears of the Kingdom, and
+related names, trademarks, characters, game content, artwork, audio, and other
+intellectual property belong to Nintendo and/or their respective rights
+holders.
+
+This project is an independent, unofficial fan-made save conversion utility.
+It is not affiliated with, sponsored by, endorsed by, licensed by, or approved
+by Nintendo. No Nintendo ownership is claimed.
+
+PUBLIC RELEASE ASSET NOTICE
+Do not package Nintendo-extracted music, sound effects, artwork, ROMs,
+firmware, encryption keys, or other proprietary Nintendo content unless you
+have the necessary rights or permission. Prefer original, properly licensed,
+or user-supplied local replacement assets.
+
+SAVE-FORMAT RESEARCH / REFERENCE MATERIAL
+Development and reverse-engineering work for this converter was informed in
+part by publicly available Tears of the Kingdom save-format research and
+variable/hash information associated with Marc Robledo's savegame-editors
+project (marcrobledo/savegame-editors).
+
+This notice is attribution and disclosure, not a claim that ThyHeroOfTime owns
+those materials. Any copied or adapted third-party code/data must comply with
+the license or permissions applicable to that exact material.
+
+PYTHON / TKINTER / PYINSTALLER
+The application uses Python/Tkinter and may be packaged using PyInstaller.
+Those projects/components remain governed by their own applicable licenses.
+
+USER-SUPPLIED ASSETS
+Users may customize local copies with their own icons and sounds. Users are
+responsible for having the rights necessary to use or redistribute them.
+
+If more third-party code, libraries, data, images, audio, or assets are added,
+record their source, copyright holder, and applicable license here.
