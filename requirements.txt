@@ -1,0 +1,3 @@
+# Runtime uses Python standard library only.
+# PyInstaller is only needed to build the Windows executable.
+pyinstaller>=6.0
