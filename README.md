@@ -54,3 +54,27 @@ The converter is an independent fan-made project and is not affiliated with or e
 Created by ThyHeroOfTime
 
 Made by a Zelda fan, for Zelda fans
+
+
+
+Legal Notice & Disclaimer
+
+**Tears of the Kingdom 1.2.1 Save Converter v2.67** is an independent,
+unofficial fan-made save conversion utility created by **ThyHeroOfTime**.
+
+This project is **not affiliated with, sponsored by, endorsed by, licensed by,
+or approved by Nintendo Co., Ltd., Nintendo of America Inc., or any of their
+affiliates.**
+
+Nintendo, The Legend of Zelda, The Legend of Zelda: Tears of the Kingdom, and
+related names, trademarks, characters, game content, artwork, audio, and other
+intellectual property belong to their respective rights holders. No ownership
+of Nintendo intellectual property is claimed by this project.
+
+This utility is intended to work with save data that the user is authorized
+to access. The project does not grant permission to obtain, distribute, or
+share game ROMs, firmware, encryption keys, copyrighted game audio/artwork,
+or other proprietary game content.
+
+Always back up your original save data before conversion or editing. Use this
+software at your own risk.
