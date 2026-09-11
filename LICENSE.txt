@@ -1,24 +1,75 @@
-This is free and unencumbered software released into the public domain.
+# TOTK Save Converter — Legal Notice
 
-Anyone is free to copy, modify, publish, use, compile, sell, or
-distribute this software, either in source code form or as a compiled
-binary, for any purpose, commercial or non-commercial, and by any
-means.
+Copyright © 2026 ThyHeroOfTime
 
-In jurisdictions that recognize copyright laws, the author or authors
-of this software dedicate any and all copyright interest in the
-software to the public domain. We make this dedication for the benefit
-of the public at large and to the detriment of our heirs and
-successors. We intend this dedication to be an overt act of
-relinquishment in perpetuity of all present and future rights to this
-software under copyright law.
+This project is licensed under the Apache License, Version 2.0.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-OTHER DEALINGS IN THE SOFTWARE.
+## ⚠️ IMPORTANT — BACK UP YOUR SAVE FIRST
 
-For more information, please refer to <https://unlicense.org>
+**ALWAYS BACK UP YOUR ORIGINAL SAVE DATA BEFORE USING TOTK SAVE CONVERTER.**
+
+TOTK Save Converter modifies and/or converts game save data. Although the software is designed to process save files safely, no guarantee is made that every save file, game version, emulator, console configuration, modification, or future software update will be compatible.
+
+By using this software, you acknowledge that modifying save data carries risks, including corrupted save data, lost progress, incompatible saves, unexpected game behavior, or other data loss.
+
+**Never test the converter using your only copy of a save file. Always keep an untouched backup.**
+
+## License
+
+TOTK Save Converter is distributed under the **Apache License, Version 2.0**.
+
+Copyright © 2026 ThyHeroOfTime
+
+You may use, modify, and redistribute portions of this project covered by the Apache License 2.0, provided that you comply with the terms and conditions of that license and retain all required copyright, license, attribution, and modification notices.
+
+Third-party components remain subject to their respective licenses and copyright holders.
+
+## Disclaimer
+
+This software is provided for educational, preservation, interoperability, development, testing, and personal-use purposes.
+
+**TOTK Save Converter is an independent, unofficial community project.**
+
+It is not affiliated with, authorized by, endorsed by, sponsored by, or otherwise associated with Nintendo Co., Ltd., Nintendo of America Inc., or any other applicable rights holder.
+
+Nintendo, The Legend of Zelda, The Legend of Zelda: Tears of the Kingdom, and all related names, characters, trademarks, copyrights, game content, and intellectual property are property of their respective owners.
+
+This project does not claim ownership of Nintendo intellectual property.
+
+## No Warranty
+
+**THIS SOFTWARE IS PROVIDED “AS IS,” WITHOUT WARRANTY OF ANY KIND.**
+
+No guarantee is made regarding the software's accuracy, reliability, compatibility, availability, or ability to preserve save data.
+
+To the maximum extent permitted by applicable law, ThyHeroOfTime shall not be responsible for corrupted save files, lost progress, lost data, software problems, hardware problems, incompatibilities, account-related consequences, or other direct or indirect damages resulting from the use or misuse of this software.
+
+**YOU USE TOTK SAVE CONVERTER AT YOUR OWN RISK.**
+
+## Third-Party Software & Attribution
+
+TOTK Save Converter may contain, modify, interact with, or depend upon third-party open-source software.
+
+All applicable third-party copyright notices, licenses, attribution requirements, and notices must be retained according to their respective licenses.
+
+The Apache License 2.0 applies only to material for which this project has the authority to grant that license.
+
+Nothing in this project's license or documentation grants ownership of or additional rights to Nintendo intellectual property or third-party material.
+
+## Bug Reports & Community Testing
+
+Bug reports, crash reports, conversion errors, compatibility problems, and other issues are welcome.
+
+Community testing and bug reports may be discussed through the Discord community operated by **Kirbymimi’s Caravan**.
+
+When reporting an issue, provide as much relevant information as possible while avoiding the sharing of private or sensitive information.
+
+**Always retain your original, untouched save backup before testing a new release or hotfix.**
+
+---
+
+**Copyright © 2026 ThyHeroOfTime**
+
+**Licensed under the Apache License, Version 2.0.**
+
+**TOTK Save Converter is an unofficial community project and is not affiliated with or endorsed by Nintendo.**
