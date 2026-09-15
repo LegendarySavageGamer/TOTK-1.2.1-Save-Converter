@@ -1,0 +1,27 @@
+Sacred Zonai Realms v7.30 - Source Package / EXE Size Audit
+==========================================================
+
+Largest top-level source/resource groups:
+server_bundle: 107.14 MiB
+webui: 35.33 MiB
+assets: 11.42 MiB
+exefs.zip: 0.70 MiB
+totk_catalog.json: 0.18 MiB
+zonai_realm.png: 0.13 MiB
+qrcode: 0.11 MiB
+totk_server_manager.py: 0.10 MiB
+zonai_realms_backend.py: 0.08 MiB
+zonai_realm.ico: 0.07 MiB
+totk_client_editor.py: 0.07 MiB
+totk_coordinate_map.json: 0.06 MiB
+SacredRealms_Hylian.py: 0.05 MiB
+defaultClientSave.ktml: 0.05 MiB
+triforce.ico: 0.05 MiB
+
+Why the standalone EXE is large:
+- PyInstaller bundles the Python runtime and imported dependencies.
+- The application packages server/runtime resources.
+- The application packages the web UI and integrated save editor.
+- The application packages maps/images and other assets.
+
+This audit does NOT recommend deleting a working dependency merely to reduce file size.

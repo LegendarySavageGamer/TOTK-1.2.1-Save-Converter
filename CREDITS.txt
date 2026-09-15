@@ -1,0 +1,31 @@
+SACRED ZONAI REALMS — CREDITS
+
+Kirbymimi
+Creator of the Tears of the Kingdom multiplayer project used by the hosting
+workflow. The multiplayer server implementation and related server/runtime
+work remain credited to Kirbymimi. Special thanks to Kirbymimi's Caravan
+community for testing, troubleshooting, support, and feedback.
+
+Wesley Da Man
+Creator of Zonai Hosting. Wesley's supplied source, hosting architecture,
+server-save conversion work, and hosting concepts informed the Zonai Realms
+Hosting integration. wesley_zonai_save_converter.py remains attributed to
+Wesley Da Man and the upstream server research it references.
+
+Marc Robledo
+Creator of the Tears of the Kingdom savegame editor used/referenced by the
+integrated editor. Credit also belongs to the researchers and data
+contributors identified by the original editor project.
+
+Sacred Zonai Realms integration / application:
+ThyHeroOfTime / Legendary Savage Gamer
+
+LICENSE
+Sacred Zonai Realms is released under the GNU Affero General Public License
+Version 3 (AGPL-3.0). See the LICENSE file.
+
+IMPORTANT THIRD-PARTY NOTE
+This project contains or interfaces with third-party work. The AGPL-3.0
+declaration for Sacred Zonai Realms does not replace or override copyrights,
+licenses, or permissions that apply to third-party components. Their original
+credits and applicable terms remain in effect.
