@@ -87,6 +87,7 @@ class ZonaiRealmBackend:
         self.backups_dir = self.data_root / "Backups"
         self.port_history_path = self.data_root / "port_history.json"
         self.session_path = self.data_root / "active_realm.json"
+        self.previous_session_path = self.data_root / "previous_realm.json"
         self.room_counter_path = self.data_root / "room_counter.json"
         self.rooms_dir.mkdir(parents=True, exist_ok=True)
         self.backups_dir.mkdir(parents=True, exist_ok=True)
@@ -227,7 +228,109 @@ class ZonaiRealmBackend:
                 "docker_image": self.docker_image,
                 "romfs_modified": bool(self.workspace and (self.workspace / ".sacred_romfs_modified").exists()),
                 "data_root": str(self.data_root),
+                "previous_session": self.previous_session_snapshot(),
             }
+
+
+    # ------------------------------ previous realm save recovery
+    def _historical_workspace_info(self, workspace: Path, session_data: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        try:
+            workspace = Path(workspace)
+            if not workspace.is_dir(): return None
+            save_dir = workspace / "User" / "SaveServer"
+            users_dir = save_dir / "users"
+            server_save = save_dir / "save.ktml"
+            meta = {}
+            meta_path = workspace / "realm_meta.json"
+            if meta_path.exists():
+                try: meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                except Exception: meta = {}
+            player_meta = {}
+            pm = workspace / "ZonaiRealmPlayers.json"
+            if pm.exists():
+                try:
+                    raw = json.loads(pm.read_text(encoding="utf-8"))
+                    if isinstance(raw, dict): player_meta = raw
+                except Exception: pass
+            players=[]
+            if users_dir.is_dir():
+                for f in sorted(users_dir.glob("*.ktml"), key=lambda x:x.name.lower()):
+                    uid=f.stem; row=player_meta.get(uid,{}) if isinstance(player_meta,dict) else {}
+                    players.append({"uid":uid,"name":row.get("name") or uid,"available":True,"size":f.stat().st_size})
+            stamp = None
+            try: stamp=datetime.fromtimestamp(workspace.stat().st_mtime, timezone.utc).isoformat()
+            except Exception: pass
+            sd=session_data or {}
+            return {
+                "available": bool(server_save.is_file() or players), "status":"CLOSED",
+                "workspace":str(workspace), "room_name":sd.get("room_name") or workspace.name,
+                "realm_display_name":sd.get("realm_display_name") or meta.get("realm_display_name") or FRIENDLY_REALM_NAME,
+                "room_number":sd.get("room_number") or meta.get("room_number"),
+                "last_session":sd.get("closed_at") or sd.get("last_session") or stamp,
+                "server_save_available":server_save.is_file(), "server_save_name":"save.ktml",
+                "player_save_count":len(players), "traveler_count":len(player_meta) if player_meta else len(players),
+                "players":players,
+                "relationship_verification":"Unable to automatically verify that these saves belong to the same Realm session. Files shown here were discovered together inside the same stored Realm folder."
+            }
+        except Exception as exc:
+            self._log(f"[previous realm scan warning] {exc}"); return None
+
+    def _persist_previous_session(self):
+        if not self.workspace or not self.workspace.is_dir(): return
+        data={"workspace":str(self.workspace),"room_name":self.room_name,"realm_display_name":self.realm_display_name,"room_number":self.room_number,"closed_at":datetime.now(timezone.utc).isoformat()}
+        info=self._historical_workspace_info(self.workspace,data)
+        if not info: return
+        try:
+            tmp=self.previous_session_path.with_suffix('.tmp'); tmp.write_text(json.dumps(data,indent=2),encoding='utf-8'); os.replace(tmp,self.previous_session_path)
+        except Exception as exc: self._log(f"[previous realm metadata warning] {exc}")
+
+    def previous_session_snapshot(self) -> dict[str, Any] | None:
+        data={}
+        if self.previous_session_path.exists():
+            try: data=json.loads(self.previous_session_path.read_text(encoding='utf-8'))
+            except Exception: data={}
+        ws=Path(data.get('workspace') or '') if data else None
+        if ws and ws.is_dir(): return self._historical_workspace_info(ws,data)
+        candidates=[]
+        for d in self.rooms_dir.iterdir() if self.rooms_dir.is_dir() else []:
+            if d.is_dir():
+                try: candidates.append((d.stat().st_mtime,d))
+                except OSError: pass
+        if not candidates: return None
+        _,ws=max(candidates,key=lambda x:x[0]); return self._historical_workspace_info(ws,{})
+
+    def _previous_workspace(self) -> Path:
+        info=self.previous_session_snapshot()
+        if not info or not info.get('workspace'): raise RuntimeError('No previous Realm save folder is available.')
+        ws=Path(info['workspace'])
+        if not ws.is_dir(): raise FileNotFoundError('The previous Realm folder no longer exists.')
+        return ws
+
+    def previous_save_file(self, uid: str | None = None) -> tuple[bytes,str,str]:
+        ws=self._previous_workspace(); save_dir=ws/'User'/'SaveServer'
+        path=(save_dir/'users'/f'{uid}.ktml') if uid else (save_dir/'save.ktml')
+        if not path.is_file(): raise FileNotFoundError('The requested previous Realm save is missing.')
+        return path.read_bytes(), path.name, 'text/plain; charset=utf-8'
+
+    def open_previous_workspace(self):
+        ws=self._previous_workspace()
+        if os.name=='nt': os.startfile(str(ws))
+        elif sys.platform=='darwin': subprocess.Popen(['open',str(ws)])
+        else: subprocess.Popen(['xdg-open',str(ws)])
+
+    def backup_previous_realm(self) -> tuple[bytes,str,str]:
+        ws=self._previous_workspace(); stamp=datetime.now().strftime('%Y%m%d-%H%M%S'); name=f'{ws.name}_SAVE_BACKUP_{stamp}.zip'
+        import io
+        buf=io.BytesIO()
+        with zipfile.ZipFile(buf,'w',zipfile.ZIP_DEFLATED) as z:
+            root=ws/'User'/'SaveServer'
+            if root.is_dir():
+                for f in root.rglob('*'):
+                    if f.is_file(): z.write(f,Path('User/SaveServer')/f.relative_to(root))
+            for extra in ('realm_meta.json','ZonaiRealmPlayers.json'):
+                f=ws/extra
+                if f.is_file(): z.write(f,extra)
+        return buf.getvalue(),name,'application/zip'
 
     # ------------------------------ durable session metadata
     def _save_session_metadata(self):
@@ -287,28 +390,41 @@ class ZonaiRealmBackend:
             self.deadline = datetime.fromisoformat(dl) if dl else None
             paused = bool(data.get("paused"))
             self.paused_remaining_seconds = data.get("paused_remaining_seconds")
-            if paused:
-                self.realm_paused = True; self.status = "paused"
-                self.connection_state = "Previous paused realm found • ready to resume"
-                self.realm_started_at = None
-            else:
-                docker_still_running = False
-                if self.engine == "docker" and self.container_name:
-                    try:
-                        docker_still_running = self._docker_running()
-                    except Exception:
-                        docker_still_running = False
-                if docker_still_running:
-                    self.realm_paused = False; self.status = "online"
-                    self.connection_state = "Reconnected to existing Docker realm"
-                    self._load_player_meta()
-                    return
-                self.realm_paused = True; self.status = "paused"
-                self.connection_state = "Previous realm found • server is stopped"
-                if self.duration_mode == "unlimited" and self.realm_started_at:
-                    self.uptime_accumulated_seconds += max(0, int((datetime.now(timezone.utc)-self.realm_started_at).total_seconds()))
-                    self.realm_started_at = None
-            self._load_player_meta()
+            docker_still_running = False
+            if self.engine == "docker" and self.container_name:
+                try:
+                    docker_still_running = self._docker_running()
+                except Exception:
+                    docker_still_running = False
+            if docker_still_running and not paused:
+                # Unlimited Docker realms intentionally left alive may reconnect.
+                self.realm_paused = False; self.status = "online"
+                self.connection_state = "Reconnected to existing Docker realm"
+                self._load_player_meta()
+                return
+
+            # A stopped/paused process from a previous GUI session is historical,
+            # not an active lock on the next launch. Keep its room/save files on
+            # disk but start the UI clean so the user can open a new Realm.
+            self._persist_previous_session()
+            if self.duration_mode == "unlimited" and self.realm_started_at:
+                self.uptime_accumulated_seconds += max(0, int((datetime.now(timezone.utc)-self.realm_started_at).total_seconds()))
+            self.workspace = None
+            self.room_name = None
+            self.realm_display_name = None
+            self.room_number = None
+            self.port = None
+            self.advertised_ip = None
+            self.container_name = None
+            self.realm_started_at = None
+            self.deadline = None
+            self.paused_remaining_seconds = None
+            self.realm_paused = False
+            self.status = "offline"
+            self.connection_state = "No realm open"
+            self.players = {}
+            self.nickname_to_uid = {}
+            self.game_ready_names.clear()
         except Exception as exc:
             self._log(f"[session recovery error] {exc}")
 
@@ -589,7 +705,26 @@ class ZonaiRealmBackend:
             if r.returncode != 0:
                 raise RuntimeError("Docker could not create the realm container:\n" + (r.stdout or "Unknown Docker error").strip())
 
+    def _sync_runtime_server_port(self, port: int):
+        """Keep serverCreator.ktml aligned with the port the server process actually listens on."""
+        if not self.workspace:
+            raise RuntimeError("Realm workspace is not ready.")
+        creator = self.workspace / "Resources" / "TOTKServer" / "serverCreator.ktml"
+        if not creator.is_file():
+            raise RuntimeError("Realm serverCreator.ktml is missing.")
+        text = creator.read_text(encoding="utf-8", errors="strict")
+        text, n = re.subn(r'("port"\s*:\s*)\d+', rf'\g<1>{int(port)}', text, count=1)
+        if n != 1:
+            raise RuntimeError("Could not synchronize the Realm server listening port.")
+        creator.write_text(text, encoding="utf-8")
+
     def _start_docker(self):
+        # Wesley's _test image listens on 10014 INSIDE the container.
+        # The user-facing Realm port is the HOST side of Docker's
+        # hostPort:10014 mapping. Do not write the host port into the mounted
+        # serverCreator.ktml or the Java server listens on the wrong internal
+        # port and every Switch/emulator connection is immediately lost.
+        self._sync_runtime_server_port(WESLEY_CONTAINER_PORT)
         if not self._docker_exists():
             self._create_docker_container()
         docker = self.docker_cli()
@@ -607,6 +742,7 @@ class ZonaiRealmBackend:
     def _start_native(self):
         if not self.workspace:
             raise RuntimeError("Realm workspace is not ready.")
+        self._sync_runtime_server_port(self.port)
         java = shutil.which("java")
         if not java:
             raise RuntimeError("Java was not found. Install 64-bit Java 17 or newer, or use Docker Desktop.")
@@ -662,8 +798,18 @@ class ZonaiRealmBackend:
         if self.engine == "docker" and self.container_name:
             docker = self.docker_cli()
             if docker and self._docker_exists():
-                r = _run_hidden([docker, "stop", "-t", "15", self.container_name], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=35)
-                if r.stdout.strip(): self._log("[Docker] " + r.stdout.strip())
+                # Ask Kirbymimi's server to flush/stop itself first instead of
+                # waiting on Docker's full stop timeout for every Pause.
+                try:
+                    self.send_command("stop")
+                    end = time.time() + 8.0
+                    while time.time() < end and self._docker_running():
+                        time.sleep(0.20)
+                except Exception as exc:
+                    self._log(f"[pause] graceful server stop fallback: {exc}")
+                if self._docker_running():
+                    r = _run_hidden([docker, "stop", "-t", "3", self.container_name], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=8)
+                    if r.stdout.strip(): self._log("[Docker] " + r.stdout.strip())
                 if self._docker_running():
                     _run_hidden([docker, "kill", self.container_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if self.log_proc and self.log_proc.poll() is None:
@@ -897,6 +1043,64 @@ class ZonaiRealmBackend:
             self._save_session_metadata()
             return self.snapshot()
 
+    def _normalize_live_server_saves_for_restart(self):
+        """Make every live KTML restart-safe and prove integer sections contain no Double tokens."""
+        if not self.workspace:
+            return
+        targets = [self.workspace / "User" / "SaveServer" / "save.ktml"]
+        users = self.workspace / "User" / "SaveServer" / "users"
+        if users.is_dir():
+            targets.extend(sorted(users.glob("*.ktml")))
+        backup_root = self.workspace / "Backups" / "PauseResumeNormalization" / datetime.now().strftime("%Y%m%d-%H%M%S")
+        changed = 0
+        integer_sections = {"Int", "Enum", "UInt", "Int64", "UInt64",
+                            "IntArray", "EnumArray", "UIntArray", "Int64Array",
+                            "UInt64Array", "Bool64bitKey"}
+
+        for path in targets:
+            if not path.is_file():
+                continue
+            original = path.read_text(encoding="utf-8", errors="strict")
+            maps = zonai_save_codec.parse_ktml(original)
+            normalized_maps = zonai_save_codec._normalize_server_maps(maps)
+            normalized = zonai_save_codec.maps_to_ktml_text(normalized_maps)
+
+            # Reparse the exact bytes that Java will read and reject any float
+            # remaining in an integer/Long section before allowing Resume.
+            verify = zonai_save_codec.parse_ktml(normalized)
+            for section in integer_sections:
+                fields = verify.get(section) or {}
+                if not isinstance(fields, dict):
+                    continue
+                for key, value in fields.items():
+                    values = value if isinstance(value, list) else [value]
+                    if any(isinstance(v, float) for v in values):
+                        raise RuntimeError(
+                            f"Resume blocked safely: {path.name} still contains a decimal/Double "
+                            f"in integer section {section}.{key}."
+                        )
+                    if section in {"Int64", "UInt64", "Int64Array", "UInt64Array", "Bool64bitKey"} and any(
+                        isinstance(v, int) and not (-0x8000000000000000 <= v <= 0x7FFFFFFFFFFFFFFF)
+                        for v in values
+                    ):
+                        raise RuntimeError(
+                            f"Resume blocked safely: {path.name} still contains a value outside "
+                            f"Java signed-Long range in {section}.{key}."
+                        )
+            parse_ktml(normalized)
+
+            if normalized != original:
+                backup_root.mkdir(parents=True, exist_ok=True)
+                rel = path.relative_to(self.workspace)
+                backup = backup_root / rel
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                backup.write_text(original, encoding="utf-8")
+                tmp = path.with_suffix(path.suffix + ".normalize-tmp")
+                tmp.write_text(normalized, encoding="utf-8")
+                os.replace(tmp, path)
+                changed += 1
+        self._log(f"[save safety] Restart audit passed for {len(targets)} KTML file(s); {changed} normalized.")
+
     def pause(self):
         with self.lifecycle_lock:
             if not self.workspace or not self.is_running(): raise RuntimeError("No running realm is available to pause.")
@@ -906,6 +1110,9 @@ class ZonaiRealmBackend:
                 self.realm_started_at = None
             self._log("Pausing realm safely…")
             self._stop_engine(remove_container=False)
+            # The stopped Java server has finished its final save. Normalize that
+            # exact on-disk KTML before any later resume starts a fresh JVM.
+            self._normalize_live_server_saves_for_restart()
             self.deadline = None; self.realm_paused = True; self.status = "paused"
             self.connection_state = "Realm paused • save files unlocked"
             for p in self.players.values(): p["online"] = False
@@ -918,6 +1125,8 @@ class ZonaiRealmBackend:
             if not self.realm_paused or not self.workspace or not self.port: raise RuntimeError("No paused realm is available to resume.")
             if not self._port_free(self.port): raise RuntimeError(f"Port {self.port} is still busy. Zonai Realms will not silently change the saved room endpoint.")
             self._repair_runtime()
+            # Also repair paused workspaces created by an older v7.35 build.
+            self._normalize_live_server_saves_for_restart()
             if self.engine == "docker":
                 self.status = "resuming"
                 self.connection_state = "Waiting for Docker Desktop engine"
@@ -936,9 +1145,14 @@ class ZonaiRealmBackend:
                         + detail
                     )
                 self._log(detail)
-                if not self._docker_exists():
-                    self._log("Saved realm container is missing; recreating it with the SAME workspace and port…")
-                    self._create_docker_container()
+                # Resume is a fresh Java process. Recreate the disposable
+                # container against the SAME persistent workspace/port so no
+                # stale container state survives Pause. Saves/room/port are kept.
+                if self._docker_exists():
+                    self._log("Recreating Docker container for clean resume • SAME workspace / SAME port / SAME saves…")
+                    _run_hidden([self.docker_cli(), "rm", "-f", self.container_name],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self._create_docker_container()
                 self._start_docker()
             else:
                 self._start_native()
@@ -980,7 +1194,7 @@ class ZonaiRealmBackend:
             self.deadline = None; self.paused_remaining_seconds = None; self.realm_paused = False
             self.status = "closed"; self.connection_state = "Realm closed"
             for p in self.players.values(): p["online"] = False
-            self._save_player_meta(); self._log("=== ZONAI REALM CLOSED ===")
+            self._save_player_meta(); self._persist_previous_session(); self._log("=== ZONAI REALM CLOSED ===")
             self._save_session_metadata()
             return self.snapshot()
 
@@ -1127,7 +1341,7 @@ class ZonaiRealmBackend:
     def _map_field_count(maps: dict[str, Any]) -> int:
         return sum(len(v) for v in maps.values() if isinstance(v, dict))
 
-    def _prepare_server_compatible_player_ktml(self, raw: bytes, filename: str) -> tuple[str, dict[str, Any]]:
+    def _prepare_server_compatible_player_ktml(self, raw: bytes, filename: str, existing_child_text: str | None = None) -> tuple[str, dict[str, Any]]:
         """Turn either a full progress.sav or KTML into the exact child-save shape
         Kirbymimi SaveServer expects in User/SaveServer/users/<uid>.ktml.
 
@@ -1140,12 +1354,9 @@ class ZonaiRealmBackend:
         """
         ext = Path(filename).suffix.lower()
         if ext == ".sav":
-            if len(raw) != zonai_save_codec.FILE_SIZE:
-                raise ValueError(
-                    f"SAV validation failed: expected exactly {zonai_save_codec.FILE_SIZE:,} bytes, got {len(raw):,}."
-                )
+            analysis = zonai_save_codec.analyze_progress_sav(raw)
             full_text = zonai_save_codec.progress_sav_to_ktml(raw)
-            input_kind = "SAV"
+            input_kind = "Vanilla/Newer SAV" if analysis.get("conversion_required") else "SAV"
         elif ext == ".ktml":
             full_text = raw.decode("utf-8", errors="strict")
             input_kind = "KTML"
@@ -1177,6 +1388,29 @@ class ZonaiRealmBackend:
                     out[key] = default_value
                     defaulted_values += 1
             projected[type_name] = out
+
+        # v8.10: real Kirbymimi UID child saves contain the Bool64bitKey set
+        # in addition to the defaultClientSave field schema.  The two real UID
+        # samples used for this release each had exactly the default child
+        # schema plus this one special 64-bit key collection.  Dropping it while
+        # projecting an edited progress.sav can lose multiplayer/game-state flags.
+        incoming_bool64 = incoming_maps.get("Bool64bitKey", {})
+        # A merged progress.sav contains the UNION of base + child Bool64 keys,
+        # so that binary cannot tell us which flags originally belonged to the
+        # child.  When replacing an existing UID from an edited SAV, preserve
+        # the live child's Bool64 collection exactly instead of polluting it
+        # with realm-wide flags.  Direct KTML uploads keep their own collection.
+        if ext == ".sav" and existing_child_text:
+            try:
+                existing_maps = zonai_save_codec.parse_ktml(existing_child_text)
+                existing_bool64 = existing_maps.get("Bool64bitKey", {})
+                if isinstance(existing_bool64, dict) and existing_bool64:
+                    incoming_bool64 = existing_bool64
+            except Exception:
+                pass
+        if isinstance(incoming_bool64, dict) and incoming_bool64:
+            projected["Bool64bitKey"] = dict(incoming_bool64)
+            imported_values += len(incoming_bool64)
 
         child_text = zonai_save_codec.maps_to_ktml_text(projected)
         # Both parsers must agree that the generated child KTML is structurally valid.
@@ -1210,12 +1444,9 @@ class ZonaiRealmBackend:
     def _prepare_server_compatible_main_ktml(self, raw: bytes, filename: str) -> tuple[str, dict[str, Any]]:
         ext = Path(filename).suffix.lower()
         if ext == ".sav":
-            if len(raw) != zonai_save_codec.FILE_SIZE:
-                raise ValueError(
-                    f"SAV validation failed: expected exactly {zonai_save_codec.FILE_SIZE:,} bytes, got {len(raw):,}."
-                )
+            analysis = zonai_save_codec.analyze_progress_sav(raw)
             text = zonai_save_codec.progress_sav_to_ktml(raw)
-            input_kind = "SAV"
+            input_kind = "Vanilla/Newer SAV" if analysis.get("conversion_required") else "SAV"
         elif ext == ".ktml":
             text = raw.decode("utf-8", errors="strict")
             input_kind = "KTML"
@@ -1271,7 +1502,8 @@ class ZonaiRealmBackend:
         try:
             self._log(f"[save-upload] Validating {Path(filename).suffix.upper().lstrip('.')} for player {uid}…")
             steps.append("Validated input format and server child-save schema.")
-            text, validation = self._prepare_server_compatible_player_ktml(raw, filename)
+            existing_child_text = target.read_text(encoding="utf-8", errors="strict") if target.is_file() else None
+            text, validation = self._prepare_server_compatible_player_ktml(raw, filename, existing_child_text)
             self._log(f"[save-upload] Server compatibility verified: {validation['server_child_fields']} child fields; merged SAV {validation['verified_merged_sav_bytes']:,} bytes.")
             steps.append("Converted/projected to server-compatible player KTML.")
 
@@ -1578,17 +1810,14 @@ class ZonaiRealmBackend:
 
     def shutdown(self):
         self._stop_event.set()
-        # v7.30: an Unlimited Docker realm is allowed to outlive the GUI.  Its
-        # real start timestamp is persisted so reopening the app recovers the
-        # same uptime instead of starting at 00:00:00. Timed/native realms keep
-        # the conservative v7.26 behavior and are paused on application exit.
+        # v8.10: closing the GUI must not keep a Realm/server alive merely to
+        # preserve historical Travelers. Pause/stop the engine, leave the room
+        # files on disk, then persist a separate previous-session recovery record.
         try:
-            if self.is_running() and self.duration_mode == "unlimited" and self.engine == "docker":
-                self._save_session_metadata()
-                self._log("Unlimited realm left running in Docker while the Sacred Zonai Realms GUI closes.")
-                return
             if self.is_running():
                 self.pause()
+            if self.workspace:
+                self._persist_previous_session()
         except Exception as exc:
             self._log(f"[shutdown error] {exc}")
 

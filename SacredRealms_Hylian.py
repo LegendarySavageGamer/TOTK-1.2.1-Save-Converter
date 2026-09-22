@@ -1,4 +1,4 @@
-"""SACRED ZONAI REALMS v7.30 — QR Diagnostics & Error Sharing.
+"""SACRED ZONAI REALMS v8.30.
 
 Primary interface: local browser-rendered desktop UI (HTML/CSS/JS) using only the
 Python standard library.  On Windows it opens Microsoft Edge in app mode when
@@ -9,6 +9,13 @@ The proven classic Tkinter tools are preserved as a compatibility fallback and c
 be launched from the modern interface while those complex panels are migrated.
 """
 from __future__ import annotations
+import re
+import tempfile
+import base64
+import io
+import zipfile
+import urllib.request
+import urllib.error
 
 import json
 import mimetypes
@@ -32,9 +39,12 @@ from pathlib import Path
 from totk_converter_core import parse_ktml, serialize_ktml, validate_ktml_types
 from zonai_realms_backend import HOSTING
 from wesley_zonai_save_converter import ktml_to_progress_sav, progress_sav_to_ktml
+import vanilla_save_compat
+import kirby_uid_save
+import light_blessing_sync
 
 APP_NAME = "SACRED ZONAI REALMS"
-APP_VERSION = "v7.30 — QR Diagnostics & Error Sharing"
+APP_VERSION = "v8.30"
 HOST = "127.0.0.1"
 APP_ERRORS = deque(maxlen=120)
 APP_ERROR_EVENTS = deque(maxlen=120)
@@ -79,6 +89,43 @@ def _cached_runtime_diagnostics(snapshot=None):
         "cached_for_report": True,
         "cache_age_seconds": None,
     }
+
+
+
+def _native_save_as(data: bytes, suggested_name: str):
+    """Ask the user where to save generated/edited data in the native Hylian window.
+
+    Returns a JSON-friendly result. If pywebview is unavailable (browser fallback),
+    the caller is told to use the normal browser download path instead.
+    """
+    safe_name = Path(str(suggested_name or "output.bin")).name or "output.bin"
+    with WEBVIEW_LOCK:
+        win = WEBVIEW_WINDOW
+    if win is None:
+        return {"ok": True, "supported": False, "cancelled": False,
+                "message": "Native Save As is unavailable in browser fallback mode."}
+    try:
+        import webview
+        picked = win.create_file_dialog(
+            webview.SAVE_DIALOG,
+            save_filename=safe_name,
+        )
+        if not picked:
+            return {"ok": True, "supported": True, "cancelled": True,
+                    "message": "Save cancelled."}
+        # pywebview versions may return either a string or a one-item tuple/list.
+        target = picked[0] if isinstance(picked, (tuple, list)) else picked
+        target = Path(str(target))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp = target.with_name(target.name + ".sacred-tmp")
+        temp.write_bytes(data)
+        os.replace(temp, target)
+        return {"ok": True, "supported": True, "cancelled": False,
+                "path": str(target), "name": target.name,
+                "message": f"Saved to {target}"}
+    except Exception as exc:
+        record_app_error(str(exc), source="Native Save As", operation=safe_name)
+        return {"ok": False, "supported": True, "cancelled": False, "error": str(exc)}
 
 
 def record_app_error(message: str, *, source: str = "Application", operation: str = "", severity: str = "ERROR"):
@@ -354,7 +401,7 @@ def _compact_qr_text(report: dict, max_bytes: int = 800) -> str:
     realm = (report.get("realm_errors") or [])[-5:]
     history = (report.get("recent_error_history") or [])[-6:]
     parts = [
-        "TOTK ALL-IN-ONE SAVE CONVERTER v7.30",
+        f"TOTK ALL-IN-ONE SAVE CONVERTER {APP_VERSION}",
         "MOBILE DIAGNOSTIC REPORT",
         f"ID: {a.get('diagnostic_id','—')}",
         f"Generated: {a.get('generated_at','—')}",
@@ -431,8 +478,76 @@ def build_error_report(user_input=None) -> bytes:
 
 
 def resource_path(relative: str | Path) -> Path:
+    """Resolve packaged resources in both source and PyInstaller builds."""
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     return base / relative
+
+
+REQUIRED_VISUAL_ASSETS = {
+    "header.png": "assets/icons/header.png",
+    "ktml.png": "assets/icons/ktml.png",
+    "sav.png": "assets/icons/sav.png",
+    "KirbyUID.png": "assets/icons/KirbyUID.png",
+    "lightofblessing.png": "assets/icons/lightofblessing.png",
+    "zonai_realm.png": "assets/icons/zonai_realm.png",
+    "sage_sidon.png": "assets/icons/sage_sidon.png",
+    "sage_tulin.png": "assets/icons/sage_tulin.png",
+    "sage_yunobo.png": "assets/icons/sage_yunobo.png",
+}
+
+
+def verify_required_visual_assets(log=True):
+    """Decode required v8.30 artwork from the same paths served to the UI.
+
+    This intentionally validates the centralized resource_path() resolution used
+    by source runs and PyInstaller (_MEIPASS) runs. It never modifies artwork.
+    """
+    results = {}
+    try:
+        from PIL import Image
+    except Exception as exc:
+        Image = None
+        pillow_error = repr(exc)
+    else:
+        pillow_error = None
+
+    for requested, rel in REQUIRED_VISUAL_ASSETS.items():
+        resolved = resource_path(rel).resolve()
+        exists = resolved.is_file()
+        info = {
+            "requested": requested,
+            "relative": rel,
+            "resolved_path": str(resolved),
+            "exists": exists,
+            "decode_ok": False,
+            "format": None,
+            "dimensions": None,
+            "mode": None,
+            "has_alpha": None,
+            "exception": None,
+        }
+        if exists and Image is not None:
+            try:
+                with Image.open(resolved) as im:
+                    im.load()
+                    info["format"] = im.format
+                    info["dimensions"] = tuple(im.size)
+                    info["mode"] = im.mode
+                    info["has_alpha"] = ("A" in im.mode) or ("transparency" in im.info)
+                    info["decode_ok"] = (im.format == "PNG")
+            except Exception as exc:
+                info["exception"] = repr(exc)
+        elif Image is None:
+            info["exception"] = f"Pillow unavailable: {pillow_error}"
+        results[requested] = info
+        if log and (not info["exists"] or not info["decode_ok"]):
+            print("ASSET LOAD ERROR:")
+            print(f"Requested: {requested}")
+            print(f"Resolved path: {resolved}")
+            print(f"Exists: {exists}")
+            print(f"Decode result: {info['decode_ok']}")
+            print(f"Exception: {info['exception']}")
+    return results
 
 
 def _find_value(doc, path, default=None):
@@ -464,6 +579,73 @@ def _set_or_add(doc, section_name, path, value):
     section[path] = value
 
 
+
+# ---------------------------------------------------------------------------
+# Sacred Zonai Realms update service (v7.50+)
+# ---------------------------------------------------------------------------
+UPDATE_CURRENT_VERSION = APP_VERSION.lstrip("vV")
+UPDATE_GITHUB_OWNER = "LegendarySavageGamer"
+UPDATE_GITHUB_REPO = "TOTK-1.2.1-Save-Converter"
+PAYPAL_SUPPORT_URL = "https://www.paypal.com/donate/?cmd=_donations&business=killersquad720%40gmail.com&currency_code=USD&source=url"
+
+def _update_version_tuple(value):
+    nums = re.findall(r"\d+", str(value or ""))
+    return tuple(int(x) for x in (nums[:4] or ["0"]))
+
+def _check_for_application_update():
+    releases_url = (
+        f"https://api.github.com/repos/{UPDATE_GITHUB_OWNER}/"
+        f"{UPDATE_GITHUB_REPO}/releases?per_page=20"
+    )
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": f"LegendarySavageGamer-Sacred-Zonai-Realms/{UPDATE_CURRENT_VERSION}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Cache-Control": "no-cache",
+    }
+    req = urllib.request.Request(releases_url, headers=headers)
+    with urllib.request.urlopen(req, timeout=8) as response:
+        releases = json.loads(response.read().decode("utf-8"))
+    candidates = []
+    for release in releases if isinstance(releases, list) else []:
+        if release.get("draft") or release.get("prerelease"):
+            continue
+        tag = str(release.get("tag_name") or release.get("name") or "").strip()
+        version = tag.lstrip("vV")
+        if re.search(r"\d", version):
+            candidates.append((_update_version_tuple(version), version, release))
+    if not candidates:
+        raise RuntimeError("GitHub returned no normal Sacred Zonai Realms releases.")
+    _, latest, release = max(candidates, key=lambda x: x[0])
+    available = _update_version_tuple(latest) > _update_version_tuple(UPDATE_CURRENT_VERSION)
+    installer = next((a for a in (release.get("assets") or [])
+                      if str(a.get("name") or "").lower().endswith(".exe")
+                      and ("setup" in str(a.get("name") or "").lower()
+                           or "installer" in str(a.get("name") or "").lower())), None)
+    return {
+        "ok": True, "current_version": UPDATE_CURRENT_VERSION,
+        "latest_version": latest or UPDATE_CURRENT_VERSION,
+        "update_available": available,
+        "release_name": release.get("name") or latest,
+        "patch_notes": release.get("body") or "Bug fixes and stability improvements.",
+        "release_url": release.get("html_url") or "",
+        "installer_url": (installer or {}).get("browser_download_url") or "",
+        "installer_name": (installer or {}).get("name") or "",
+    }
+
+def _download_and_launch_update(installer_url, installer_name):
+    if not installer_url or not str(installer_url).startswith("https://github.com/"):
+        raise RuntimeError("The latest release does not contain a GitHub installer asset.")
+    name = re.sub(r"[^A-Za-z0-9._ -]+", "_", installer_name or "Sacred_Zonai_Realms_Update_Setup.exe")
+    target = Path(tempfile.gettempdir()) / name
+    req = urllib.request.Request(installer_url, headers={"User-Agent": f"LegendarySavageGamer-Sacred-Zonai-Realms/{UPDATE_CURRENT_VERSION}"})
+    with urllib.request.urlopen(req, timeout=60) as response, open(target, "wb") as out:
+        shutil.copyfileobj(response, out)
+    if target.suffix.lower() != ".exe" or target.stat().st_size < 1024:
+        raise RuntimeError("The downloaded update installer did not pass validation.")
+    subprocess.Popen([str(target)], close_fds=True)
+    return {"ok": True, "launched": True, "path": str(target)}
+
 class AppState:
     def __init__(self):
         self.lock = threading.RLock()
@@ -494,6 +676,7 @@ TOKEN = secrets.token_urlsafe(24)
 # ---------------------------------------------------------------------------
 WALLPAPER_SLOTS = {"app_header", "home", "converter", "client", "hosting", "recovery", "multiplayer", "multiplayer_hero", "credits", "support"}
 SOUND_SLOTS = {"tab", "success", "warning", "error"}
+MUSIC_SLOTS = {"theme"}
 WALLPAPER_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 SOUND_EXTS = {".mp3", ".wav", ".ogg"}
 FIT_MODES = {"fill", "fit", "stretch", "center"}
@@ -511,10 +694,12 @@ class PersonalizationStore:
         self.media_root = self.root / "customization"
         self.wallpaper_root = self.media_root / "wallpapers"
         self.sound_root = self.media_root / "sounds"
+        self.music_root = self.media_root / "music"
         self.config_path = self.root / "settings.json"
         self.root.mkdir(parents=True, exist_ok=True)
         self.wallpaper_root.mkdir(parents=True, exist_ok=True)
         self.sound_root.mkdir(parents=True, exist_ok=True)
+        self.music_root.mkdir(parents=True, exist_ok=True)
         self.data = self._load()
 
     @staticmethod
@@ -523,7 +708,8 @@ class PersonalizationStore:
             "wallpapers": {},
             "wallpaper_fit": {slot: "fill" for slot in WALLPAPER_SLOTS},
             "sounds": {},
-            "audio": {"volume": 28, "mute": False},
+            "audio": {"volume": 28, "mute": False, "music_enabled": True, "music_volume": 18, "music_loop": True, "music_startup": True},
+            "music": {},
         }
 
     def _load(self):
@@ -532,7 +718,7 @@ class PersonalizationStore:
             if self.config_path.is_file():
                 saved = json.loads(self.config_path.read_text(encoding="utf-8"))
                 if isinstance(saved, dict):
-                    for key in ("wallpapers", "wallpaper_fit", "sounds", "audio"):
+                    for key in ("wallpapers", "wallpaper_fit", "sounds", "audio", "music"):
                         if isinstance(saved.get(key), dict):
                             data[key].update(saved[key])
         except Exception as exc:
@@ -562,15 +748,25 @@ class PersonalizationStore:
                 path = self.sound_root / Path(name).name
                 if slot in SOUND_SLOTS and path.is_file():
                     sounds[slot] = {"name": path.name, "url": self._public_url("sounds", path.name)}
+            music = {}
+            for slot, name in list(self.data.get("music", {}).items()):
+                path = self.music_root / Path(name).name
+                if slot in MUSIC_SLOTS and path.is_file():
+                    music[slot] = {"name": path.name, "url": self._public_url("music", path.name)}
             fits = {slot: (self.data.get("wallpaper_fit", {}).get(slot) if self.data.get("wallpaper_fit", {}).get(slot) in FIT_MODES else "fill") for slot in WALLPAPER_SLOTS}
             audio = self.data.get("audio", {})
             return {
                 "wallpapers": wallpapers,
                 "wallpaper_fit": fits,
                 "sounds": sounds,
+                "music": music,
                 "audio": {
                     "volume": max(0, min(100, int(audio.get("volume", 28) or 0))),
                     "mute": bool(audio.get("mute", False)),
+                    "music_enabled": bool(audio.get("music_enabled", True)),
+                    "music_volume": max(0, min(100, int(audio.get("music_volume", 18) if audio.get("music_volume", 18) is not None else 18))),
+                    "music_loop": bool(audio.get("music_loop", True)),
+                    "music_startup": bool(audio.get("music_startup", True)),
                 },
                 "config_path": str(self.config_path),
             }
@@ -582,6 +778,8 @@ class PersonalizationStore:
             allowed_slots, allowed_exts, root, max_bytes = WALLPAPER_SLOTS, WALLPAPER_EXTS, self.wallpaper_root, 64 * 1024 * 1024
         elif kind == "sounds":
             allowed_slots, allowed_exts, root, max_bytes = SOUND_SLOTS, SOUND_EXTS, self.sound_root, 32 * 1024 * 1024
+        elif kind == "music":
+            allowed_slots, allowed_exts, root, max_bytes = MUSIC_SLOTS, SOUND_EXTS, self.music_root, 128 * 1024 * 1024
         else:
             raise ValueError("Unknown personalization media type")
         if slot not in allowed_slots:
@@ -614,6 +812,14 @@ class PersonalizationStore:
                 self.data["audio"]["volume"] = max(0, min(100, int(payload.get("volume", 28))))
             if "mute" in payload:
                 self.data["audio"]["mute"] = bool(payload.get("mute"))
+            if "music_enabled" in payload:
+                self.data["audio"]["music_enabled"] = bool(payload.get("music_enabled"))
+            if "music_volume" in payload:
+                self.data["audio"]["music_volume"] = max(0, min(100, int(payload.get("music_volume", 18))))
+            if "music_loop" in payload:
+                self.data["audio"]["music_loop"] = bool(payload.get("music_loop"))
+            if "music_startup" in payload:
+                self.data["audio"]["music_startup"] = bool(payload.get("music_startup"))
             slot = payload.get("wallpaper_slot")
             fit = payload.get("wallpaper_fit")
             if slot is not None or fit is not None:
@@ -649,12 +855,131 @@ class PersonalizationStore:
                     if old_name:
                         try: (self.sound_root / Path(old_name).name).unlink(missing_ok=True)
                         except Exception: pass
+            elif kind == "music":
+                slots = [slot] if slot else list(MUSIC_SLOTS)
+                for s in slots:
+                    if s not in MUSIC_SLOTS:
+                        raise ValueError("Unknown music slot")
+                    old_name = self.data["music"].pop(s, None)
+                    if old_name:
+                        try: (self.music_root / Path(old_name).name).unlink(missing_ok=True)
+                        except Exception: pass
             else:
-                raise ValueError("Reset kind must be wallpaper or sound")
+                raise ValueError("Reset kind must be wallpaper, sound, or music")
             self.save()
         return self.snapshot()
 
 CUSTOMIZATION = PersonalizationStore()
+
+
+# ---------------------------------------------------------------------------
+# Native Windows background theme playback
+# ---------------------------------------------------------------------------
+# WebView/Chromium autoplay policy can block an HTML <audio> element even when
+# the bundled file exists. The desktop application therefore owns default-theme
+# playback on Windows through the built-in Windows MCI audio service. This uses
+# no third-party audio package and is not subject to browser autoplay policy.
+class NativeThemePlayer:
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.alias = "sacred_zonai_theme"
+        self.path = None
+        self.playing = False
+        self.last_error = None
+        self._generation = 0
+
+    @property
+    def supported(self):
+        return os.name == "nt"
+
+    def _mci(self, command: str):
+        if not self.supported:
+            return False, "Native theme playback is only available on Windows."
+        import ctypes
+        buf = ctypes.create_unicode_buffer(512)
+        code = ctypes.windll.winmm.mciSendStringW(command, buf, len(buf), 0)
+        if code:
+            err = ctypes.create_unicode_buffer(512)
+            ctypes.windll.winmm.mciGetErrorStringW(code, err, len(err))
+            return False, err.value or f"MCI error {code}"
+        return True, buf.value
+
+    def _active_path(self):
+        rec = CUSTOMIZATION.data.get("music", {}).get("theme")
+        if rec:
+            custom = CUSTOMIZATION.music_root / Path(rec).name
+            if custom.is_file() and custom.suffix.lower() in {".mp3", ".wav"}:
+                return custom
+        return resource_path("webui/assets/music/sacred_zonai_realms_theme.mp3")
+
+    def stop(self):
+        with self.lock:
+            self._generation += 1
+            self._mci(f"stop {self.alias}")
+            self._mci(f"close {self.alias}")
+            self.playing = False
+
+    def sync(self, force_play=False):
+        if not self.supported:
+            return {"ok": True, "native": False, "playing": False}
+        with self.lock:
+            audio = CUSTOMIZATION.snapshot().get("audio", {})
+            enabled = bool(audio.get("music_enabled", True))
+            startup = bool(audio.get("music_startup", True))
+            muted = bool(audio.get("mute", False))
+            volume = max(0, min(100, int(audio.get("music_volume", 18))))
+            should_play = enabled and not muted and (startup or force_play)
+            if not should_play:
+                self.stop()
+                return {"ok": True, "native": True, "playing": False, "volume": volume}
+            path = self._active_path()
+            if not path.is_file():
+                self.last_error = f"Bundled theme not found: {path}"
+                self.stop()
+                return {"ok": False, "native": True, "playing": False, "error": self.last_error}
+            if path.suffix.lower() not in {".mp3", ".wav"}:
+                # OGG remains supported by the web audio fallback for custom themes.
+                self.stop()
+                return {"ok": True, "native": False, "playing": False, "fallback": "web", "path": str(path)}
+            self.stop()
+            quoted = str(path).replace('"', '')
+            ok, err = self._mci(f'open "{quoted}" type mpegvideo alias {self.alias}')
+            if not ok:
+                # WAV can prefer waveaudio on older Windows systems.
+                ok, err = self._mci(f'open "{quoted}" type waveaudio alias {self.alias}')
+            if not ok:
+                self.last_error = err
+                return {"ok": False, "native": True, "playing": False, "error": err}
+            # Set the target quietly BEFORE starting playback. Fade upward from 0.
+            self._mci(f"setaudio {self.alias} volume to 0")
+            repeat = " repeat" if bool(audio.get("music_loop", True)) else ""
+            ok, err = self._mci(f"play {self.alias}{repeat}")
+            if not ok:
+                self.last_error = err
+                self.stop()
+                return {"ok": False, "native": True, "playing": False, "error": err}
+            self.path = path
+            self.playing = True
+            self.last_error = None
+            self._generation += 1
+            generation = self._generation
+            target = volume * 10
+            def fade():
+                # ~2.5 second gentle fade to the saved music level.
+                for step in range(1, 26):
+                    time.sleep(0.1)
+                    with self.lock:
+                        if generation != self._generation or not self.playing:
+                            return
+                        self._mci(f"setaudio {self.alias} volume to {int(target * step / 25)}")
+            threading.Thread(target=fade, name="SacredThemeFade", daemon=True).start()
+            return {"ok": True, "native": True, "playing": True, "volume": volume, "source": path.name}
+
+    def status(self):
+        return {"ok": True, "native": self.supported, "playing": bool(self.playing), "source": self.path.name if self.path else None, "error": self.last_error}
+
+
+NATIVE_THEME = NativeThemePlayer()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -718,6 +1043,11 @@ class Handler(BaseHTTPRequestHandler):
             raise
 
     def do_GET(self):
+        if self.path.split("?", 1)[0] == "/api/update/check":
+            try:
+                return self._send_json(_check_for_application_update(), 200)
+            except Exception as exc:
+                return self._send_json({"ok": False, "current_version": UPDATE_CURRENT_VERSION, "update_available": False, "error": str(exc)}, 200)
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         if path.startswith("/api/"):
@@ -727,6 +1057,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": True, **STATE.summary()})
             if path == "/api/hosting/state":
                 return self._send_json({"ok": True, **HOSTING.snapshot()})
+            if path == "/api/hosting/previous-session":
+                return self._send_json({"ok": True, "previous_session": HOSTING.previous_session_snapshot()})
+            if path == "/api/hosting/download-previous-save":
+                query = urllib.parse.parse_qs(parsed.query); uid=(query.get("uid") or [None])[0]
+                data,name,ctype=HOSTING.previous_save_file(uid)
+                self.send_response(200); self.send_header("Content-Type",ctype); self.send_header("Content-Disposition",f'attachment; filename="{name}"'); self.send_header("Content-Length",str(len(data))); self.send_header("Cache-Control","no-store"); self.end_headers(); return self.wfile.write(data)
+            if path == "/api/hosting/backup-previous-realm":
+                data,name,ctype=HOSTING.backup_previous_realm()
+                self.send_response(200); self.send_header("Content-Type",ctype); self.send_header("Content-Disposition",f'attachment; filename="{name}"'); self.send_header("Content-Length",str(len(data))); self.send_header("Cache-Control","no-store"); self.end_headers(); return self.wfile.write(data)
             if path == "/api/hosting/logs":
                 query = urllib.parse.parse_qs(parsed.query)
                 try:
@@ -742,6 +1081,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": True, **live_diag})
             if path == "/api/customization/settings":
                 return self._send_json({"ok": True, **CUSTOMIZATION.snapshot()})
+            if path == "/api/music/status":
+                return self._send_json(NATIVE_THEME.status())
             if path == "/api/hosting/download-main-save":
                 query = urllib.parse.parse_qs(parsed.query)
                 fmt = (query.get("format") or ["ktml"])[0]
@@ -767,7 +1108,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.wfile.write(data)
             if path == "/api/diagnostics/report":
                 data = build_error_report()
-                name = f"TOTK_Save_Converter_Error_v7.30_{datetime.now().strftime('%Y-%m-%d_%H%M')}.txt"
+                name = f"TOTK_Save_Converter_Error_v8.30_{datetime.now().strftime('%Y-%m-%d_%H%M')}.txt"
                 return self._send_bytes(data, name, "text/plain; charset=utf-8")
             if path == "/api/diagnostics/history":
                 report = _diagnostic_context({})
@@ -791,9 +1132,9 @@ class Handler(BaseHTTPRequestHandler):
         # User-selected wallpaper/audio media lives outside the packaged EXE.
         if path.startswith("/user-media/"):
             parts = [urllib.parse.unquote(x) for x in path.split("/") if x]
-            if len(parts) != 3 or parts[0] != "user-media" or parts[1] not in {"wallpapers", "sounds"}:
+            if len(parts) != 3 or parts[0] != "user-media" or parts[1] not in {"wallpapers", "sounds", "music"}:
                 self.send_error(404); return
-            root = CUSTOMIZATION.wallpaper_root if parts[1] == "wallpapers" else CUSTOMIZATION.sound_root
+            root = CUSTOMIZATION.wallpaper_root if parts[1] == "wallpapers" else (CUSTOMIZATION.sound_root if parts[1] == "sounds" else CUSTOMIZATION.music_root)
             name = Path(parts[2]).name
             full = (root / name).resolve()
             try:
@@ -835,25 +1176,58 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
+        if self.path.split("?", 1)[0] == "/api/update/install":
+            try:
+                info = _check_for_application_update()
+                if not info.get("update_available"):
+                    return self._send_json({"ok": True, "update_available": False, "message": "Sacred Zonai Realms is up to date."}, 200)
+                result = _download_and_launch_update(info.get("installer_url"), info.get("installer_name"))
+                result.update({"update_available": True, "latest_version": info.get("latest_version")})
+                return self._send_json(result, 200)
+            except Exception as exc:
+                return self._send_json({"ok": False, "error": str(exc)}, 500)
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         if not self._authorized():
             return self._send_json({"ok": False, "error": "Unauthorized"}, 403)
         try:
+            if path == "/api/open-paypal":
+                try:
+                    opened = bool(webbrowser.open(PAYPAL_SUPPORT_URL, new=2))
+                except Exception as exc:
+                    return self._send_json({"ok": False, "error": "Unable to open PayPal in your browser. Please check your default browser and try again.", "detail": str(exc)}, 500)
+                if not opened:
+                    return self._send_json({"ok": False, "error": "Unable to open PayPal in your browser. Please check your default browser and try again."}, 500)
+                return self._send_json({"ok": True, "message": "PayPal opened in your external browser."}, 200)
+            if path == "/api/music/sync":
+                payload = json.loads(self._read_body() or b"{}")
+                return self._send_json(NATIVE_THEME.sync(force_play=bool(payload.get("force_play", False))))
             if path == "/api/customization/upload":
                 query = urllib.parse.parse_qs(parsed.query)
                 kind = (query.get("kind") or [""])[0]
                 slot = (query.get("slot") or [""])[0]
                 filename = urllib.parse.unquote(self.headers.get("X-Filename") or "")
-                limit = 64 * 1024 * 1024 if kind == "wallpapers" else 32 * 1024 * 1024
+                limit = 64 * 1024 * 1024 if kind == "wallpapers" else (128 * 1024 * 1024 if kind == "music" else 32 * 1024 * 1024)
                 snap = CUSTOMIZATION.save_media(kind, slot, filename, self._read_body(max_bytes=limit))
+                if kind == "music": NATIVE_THEME.sync(force_play=True)
                 return self._send_json({"ok": True, "message": f"Saved custom {kind[:-1] if kind.endswith('s') else kind} for {slot}.", **snap})
             if path == "/api/customization/preferences":
                 payload = json.loads(self._read_body() or b"{}")
-                return self._send_json({"ok": True, **CUSTOMIZATION.set_preferences(payload)})
+                snap = CUSTOMIZATION.set_preferences(payload)
+                if any(k in payload for k in ("mute", "music_enabled", "music_volume", "music_loop", "music_startup")):
+                    NATIVE_THEME.sync(force_play=bool(payload.get("music_enabled", False)))
+                return self._send_json({"ok": True, **snap})
             if path == "/api/customization/reset":
                 payload = json.loads(self._read_body() or b"{}")
-                return self._send_json({"ok": True, **CUSTOMIZATION.reset(payload.get("kind", ""), payload.get("slot"))})
+                snap = CUSTOMIZATION.reset(payload.get("kind", ""), payload.get("slot"))
+                if payload.get("kind") == "music": NATIVE_THEME.sync(force_play=True)
+                return self._send_json({"ok": True, **snap})
+            if path == "/api/native-save-as":
+                raw = self._read_body(max_bytes=64 * 1024 * 1024)
+                filename = urllib.parse.unquote(self.headers.get("X-Filename") or "output.bin")
+                result = _native_save_as(raw, filename)
+                status = 200 if result.get("ok") else 500
+                return self._send_json(result, status)
             if path == "/api/convert/ktml-to-sav":
                 raw = self._read_body(max_bytes=64 * 1024 * 1024)
                 text = raw.decode("utf-8", errors="strict")
@@ -861,8 +1235,120 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_bytes(data, "progress.sav")
             if path == "/api/convert/sav-to-ktml":
                 raw = self._read_body(max_bytes=64 * 1024 * 1024)
-                text = progress_sav_to_ktml(raw)
+                filename = urllib.parse.unquote(self.headers.get("X-Filename") or "progress.sav")
+                text, report = vanilla_save_compat.convert(raw, filename)
                 return self._send_bytes(text.encode("utf-8"), "converted-save.ktml", "text/plain; charset=utf-8")
+            if path == "/api/convert/analyze-sav":
+                raw = self._read_body(max_bytes=64 * 1024 * 1024)
+                filename = urllib.parse.unquote(self.headers.get("X-Filename") or "progress.sav")
+                schema_path = resource_path("server_bundle/runtime/Resources/SaveServer/defaultClientSave.ktml")
+                schema_text = schema_path.read_text(encoding="utf-8", errors="strict") if schema_path.is_file() else None
+                report = vanilla_save_compat.analyze(raw, filename, schema_text)
+                return self._send_json({"ok": True, **report})
+            if path == "/api/light-blessing/analyze":
+                payload = json.loads(self._read_body(max_bytes=24 * 1024 * 1024) or b"{}")
+                realm_text = str(payload.get("realm_ktml") or "")
+                if not realm_text:
+                    return self._send_json({"ok": False, "error": "Choose a Realm save.ktml first."}, 400)
+                report = light_blessing_sync.analyze_realm(realm_text)
+                return self._send_json({"ok": True, **report})
+            if path == "/api/light-blessing/compare":
+                payload = json.loads(self._read_body(max_bytes=48 * 1024 * 1024) or b"{}")
+                before_text = str(payload.get("before_ktml") or "")
+                after_text = str(payload.get("after_ktml") or "")
+                if not before_text or not after_text:
+                    return self._send_json({"ok": False, "error": "Choose both BEFORE and AFTER Realm save.ktml files."}, 400)
+                report = light_blessing_sync.compare_realms(before_text, after_text)
+                return self._send_json({"ok": True, **report})
+            if path == "/api/convert/kirby-edited-sav-sync-pair":
+                payload = json.loads(self._read_body(max_bytes=48 * 1024 * 1024) or b"{}")
+                uid_text = str(payload.get("uid_ktml") or "")
+                filename = str(payload.get("filename") or "player.ktml")
+                base_text = str(payload.get("base_ktml") or "")
+                sav_b64 = str(payload.get("sav_base64") or "")
+                if not uid_text or not base_text or not sav_b64:
+                    return self._send_json({"ok": False, "error": "Choose the original UID KTML, matching Realm save.ktml, and edited progress.sav."}, 400)
+                try:
+                    sav_bytes = base64.b64decode(sav_b64, validate=True)
+                    uid_out, realm_out, report = kirby_uid_save.synchronize_edited_sav_pair(sav_bytes, uid_text, filename, base_text)
+                    mem = io.BytesIO()
+                    with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as z:
+                        out_name = Path(filename).name if kirby_uid_save.uid_from_filename(filename) else "player-uid.ktml"
+                        z.writestr("Synchronized_SaveServer/users/" + out_name, uid_out.encode("utf-8"))
+                        z.writestr("Synchronized_SaveServer/save.ktml", realm_out.encode("utf-8"))
+                        z.writestr("SYNCHRONIZED_UPDATE_REPORT.json", json.dumps(report, indent=2, ensure_ascii=False).encode("utf-8"))
+                    data=mem.getvalue()
+                except Exception as exc:
+                    return self._send_json({"ok": False, "error": str(exc)}, 400)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Disposition", 'attachment; filename="Sacred_Zonai_Realms_Synchronized_SaveServer.zip"')
+                self.send_header("X-SZR-Pair-Validation", "passed")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return self.wfile.write(data)
+            if path == "/api/convert/kirby-edited-sav-to-uid":
+                payload = json.loads(self._read_body(max_bytes=48 * 1024 * 1024) or b"{}")
+                uid_text = str(payload.get("uid_ktml") or "")
+                filename = str(payload.get("filename") or "player.ktml")
+                base_text = str(payload.get("base_ktml") or "")
+                sav_b64 = str(payload.get("sav_base64") or "")
+                if not uid_text or not sav_b64:
+                    return self._send_json({"ok": False, "error": "Choose the original UID KTML and the edited progress.sav."}, 400)
+                if not base_text:
+                    workspace = getattr(HOSTING, "workspace", None)
+                    active_base = Path(workspace) / "User" / "SaveServer" / "save.ktml" if workspace else None
+                    if active_base and active_base.is_file():
+                        base_text = active_base.read_text(encoding="utf-8", errors="strict")
+                if not base_text:
+                    return self._send_json({"ok": False, "error": "Choose the matching Realm save.ktml, or open that Realm first."}, 400)
+                try:
+                    sav_bytes = base64.b64decode(sav_b64, validate=True)
+                    text, report = kirby_uid_save.project_edited_sav_to_uid(sav_bytes, uid_text, filename, base_text)
+                except Exception as exc:
+                    return self._send_json({"ok": False, "error": str(exc)}, 400)
+                data = text.encode("utf-8")
+                out_name = Path(filename).name if kirby_uid_save.uid_from_filename(filename) else "projected-player-uid.ktml"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="{out_name}"')
+                self.send_header("X-SZR-UID-Projection", "schema-preserved")
+                self.send_header("X-SZR-UID-Fields", str(report.get("output_uid_fields", 0)))
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return self.wfile.write(data)
+            if path in ("/api/convert/kirby-uid-analyze", "/api/convert/kirby-uid-to-sav"):
+                payload = json.loads(self._read_body(max_bytes=32 * 1024 * 1024) or b"{}")
+                uid_text = str(payload.get("uid_ktml") or "")
+                filename = str(payload.get("filename") or "player.ktml")
+                base_text = str(payload.get("base_ktml") or "")
+                base_source = "selected realm save.ktml"
+                if not base_text:
+                    workspace = getattr(HOSTING, "workspace", None)
+                    active_base = Path(workspace) / "User" / "SaveServer" / "save.ktml" if workspace else None
+                    if active_base and active_base.is_file():
+                        base_text = active_base.read_text(encoding="utf-8", errors="strict")
+                        base_source = "currently open Realm/User/SaveServer/save.ktml"
+                if not uid_text:
+                    return self._send_json({"ok": False, "error": "Choose a Kirby UID .ktml player save first."}, 400)
+                if path.endswith("analyze"):
+                    report = kirby_uid_save.analyze(uid_text, filename, base_text or None)
+                    report["base_source"] = base_source if base_text else "not supplied"
+                    return self._send_json({"ok": True, **report})
+                if not base_text:
+                    return self._send_json({"ok": False, "error": "Choose the matching Realm User/SaveServer/save.ktml, or open that Realm in Zonai Realms first."}, 400)
+                data, report = kirby_uid_save.convert(uid_text, filename, base_text)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Disposition", 'attachment; filename="progress.sav"')
+                self.send_header("X-Kirby-UID", report.get("uid") or "")
+                self.send_header("X-SZR-Validation", "passed" if report.get("output_validation_passed") else "partial")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return self.wfile.write(data)
             if path == "/api/hosting/repair-runtime":
                 detail = HOSTING.repair_runtime()
                 return self._send_json({"ok": True, "message": detail, **HOSTING.snapshot()})
@@ -944,6 +1430,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/hosting/open-folder":
                 HOSTING.open_workspace()
                 return self._send_json({"ok": True})
+            if path == "/api/hosting/open-previous-folder":
+                HOSTING.open_previous_workspace()
+                return self._send_json({"ok": True})
             if path == "/api/hosting/replace-main-save":
                 filename = urllib.parse.unquote(self.headers.get("X-Filename") or "server-save.ktml")
                 result = HOSTING.replace_main_save(self._read_body(), filename)
@@ -986,7 +1475,6 @@ class Handler(BaseHTTPRequestHandler):
                 report = _diagnostic_context(payload)
                 return self._send_json({"ok": True, "report": report, "text": _diagnostic_text(report)})
             if path == "/api/diagnostics/qr":
-                import base64
                 payload = json.loads(self._read_body(max_bytes=512 * 1024) or b"{}")
                 report = _diagnostic_context(payload)
                 qr_text = _compact_qr_text(report)
@@ -1017,9 +1505,9 @@ class Handler(BaseHTTPRequestHandler):
                 stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
                 if fmt == "json":
                     data = json.dumps(report, indent=2, ensure_ascii=False, default=str).encode("utf-8")
-                    return self._send_bytes(data, f"TOTK_Save_Converter_Error_v7.30_{stamp}.json", "application/json; charset=utf-8")
+                    return self._send_bytes(data, f"TOTK_Save_Converter_Error_v8.30_{stamp}.json", "application/json; charset=utf-8")
                 data = _diagnostic_text(report).encode("utf-8")
-                return self._send_bytes(data, f"TOTK_Save_Converter_Error_v7.30_{stamp}.txt", "text/plain; charset=utf-8")
+                return self._send_bytes(data, f"TOTK_Save_Converter_Error_v8.30_{stamp}.txt", "text/plain; charset=utf-8")
             if path == "/api/diagnostics/client-error":
                 payload = json.loads(self._read_body() or b"{}")
                 record_app_error("Browser UI: " + str(payload.get("message") or "Unknown UI error") + (f" @ {payload.get('source')}:{payload.get('line')}" if payload.get("source") else ""), source="Browser UI", operation="UI Event")
@@ -1083,6 +1571,14 @@ def open_app_window(url):
     Returns True only when a blocking pywebview window was used.
     """
     try:
+        # Sacred Zonai Realms owns this native WebView2 window. Allow its bundled
+        # low-volume theme to autoplay on startup without requiring a file picker
+        # or an initial click. This does not affect external websites/browsers.
+        if os.name == "nt":
+            existing = os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "").strip()
+            autoplay_arg = "--autoplay-policy=no-user-gesture-required"
+            if autoplay_arg not in existing:
+                os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = (existing + " " + autoplay_arg).strip()
         import webview
         # Marc Robledo's integrated save editor exports the edited progress.sav
         # through a normal browser download. pywebview disables downloads by
@@ -1092,7 +1588,7 @@ def open_app_window(url):
         except Exception:
             pass
         WEBVIEW_WINDOW = webview.create_window(
-            f"{APP_NAME} — {APP_VERSION}",
+            f"{APP_NAME} - {APP_VERSION} Made By (ThyHeroOfTime)",
             url,
             width=1600, height=960,
             min_size=(980, 680),
@@ -1106,7 +1602,7 @@ def open_app_window(url):
     exe = _find_edge()
     if exe:
         try:
-            subprocess.Popen([str(exe), f"--app={url}", "--window-size=1600,960", "--disable-features=Translate"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen([str(exe), f"--app={url}", "--window-size=1600,960", "--disable-features=Translate", "--autoplay-policy=no-user-gesture-required"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return False
         except Exception:
             pass
@@ -1114,13 +1610,31 @@ def open_app_window(url):
     return False
 
 def main():
+    if "--asset-self-test" in sys.argv:
+        results = verify_required_visual_assets(log=True)
+        failed = [name for name, info in results.items() if not info.get("exists") or not info.get("decode_ok")]
+        if failed:
+            print("ASSET SELF-TEST FAILED: " + ", ".join(failed))
+            raise SystemExit(2)
+        print("ASSET SELF-TEST PASSED: header.png, ktml.png, sav.png, KirbyUID.png, lightofblessing.png, zonai_realm.png, sage_sidon.png, sage_tulin.png, sage_yunobo.png")
+        raise SystemExit(0)
     if "--classic" in sys.argv:
         return run_classic()
+    visual_asset_results = verify_required_visual_assets(log=True)
+    failed_assets = [name for name, info in visual_asset_results.items() if not info.get("exists") or not info.get("decode_ok")]
+    if failed_assets:
+        print("Required v8.30 visual assets failed validation: " + ", ".join(failed_assets))
     server = ThreadingHTTPServer((HOST, 0), Handler)
     port = server.server_address[1]
     url = f"http://{HOST}:{port}/?token={urllib.parse.quote(TOKEN)}"
     threading.Thread(target=server.serve_forever, name="SacredRealmsWeb", daemon=True).start()
     print(f"{APP_NAME} {APP_VERSION}")
+    # Start the bundled/default theme natively on Windows. This happens before
+    # the WebView is shown, so Chromium autoplay restrictions cannot silence it.
+    try:
+        NATIVE_THEME.sync()
+    except Exception as exc:
+        record_app_error(f"Background theme startup failed: {exc}")
     print(f"Modern Hylian UI: {url}")
     try:
         used_native_webview = open_app_window(url)

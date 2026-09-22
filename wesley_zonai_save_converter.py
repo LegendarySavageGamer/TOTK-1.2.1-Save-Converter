@@ -46,7 +46,7 @@ ALL_TYPES = [
 
 MAGIC1 = 16909060
 MAGIC2 = 4710644
-FILE_SIZE = 2307656  # every real progress.sav is exactly this many bytes
+FILE_SIZE = 2307656  # server-export layout size; newer vanilla hardware layouts can be larger
 BOOL64_KEY_NAME = "unk2749067540"  # the one key TOTKSaveData ever uses for this type
 
 _NAME2HASH_LINE_RE = re.compile(r'^"((?:\\.|[^"\\])*)"\s*:\s*(-?\d+)\s*$')
@@ -238,15 +238,33 @@ def _pack_bytes(value):
     return bytes(int(v) & 0xFF for v in value)
 
 
+def _coerce_s32(value, *, field_type="Int"):
+    """Encode the low 32 bits using Java-compatible signed int semantics.
+
+    KTML/JSON tooling can expose a 32-bit bit-pattern as 0..4294967295 even
+    when the binary field is a signed Java int. struct.pack("<i") rejects
+    values above 2147483647, so convert the same 32-bit pattern to its signed
+    two's-complement representation before packing.
+    """
+    n = int(value)
+    if n < -0x80000000 or n > 0xFFFFFFFF:
+        raise ConversionError(
+            f"{field_type} value {n} is outside the supported 32-bit range "
+            f"(-2147483648 through 4294967295)."
+        )
+    n &= 0xFFFFFFFF
+    return n - 0x100000000 if n >= 0x80000000 else n
+
+
 def _encode_field(type_name, value):
     if type_name == "Bool":
         return struct.pack("<i", 1 if value else 0), None
     if type_name == "Int":
-        return struct.pack("<i", int(value)), None
+        return struct.pack("<i", _coerce_s32(value, field_type="Int")), None
     if type_name == "Float":
         return struct.pack("<f", float(value)), None
     if type_name == "Enum":
-        return struct.pack("<i", int(value)), None
+        return struct.pack("<i", _coerce_s32(value, field_type="Enum")), None
     if type_name == "UInt":
         return struct.pack("<I", int(value) & 0xFFFFFFFF), None
 
@@ -260,13 +278,13 @@ def _encode_field(type_name, value):
         blob += b"\x00" * ((-len(blob)) % 4)  # align up to 4 bytes, like the real exporter
         return None, blob
     if type_name == "IntArray":
-        blob = struct.pack("<i", len(value)) + b"".join(struct.pack("<i", int(v)) for v in value)
+        blob = struct.pack("<i", len(value)) + b"".join(struct.pack("<i", _coerce_s32(v, field_type="IntArray")) for v in value)
         return None, blob
     if type_name == "FloatArray":
         blob = struct.pack("<i", len(value)) + b"".join(struct.pack("<f", float(v)) for v in value)
         return None, blob
     if type_name == "EnumArray":
-        blob = struct.pack("<i", len(value)) + b"".join(struct.pack("<i", int(v)) for v in value)
+        blob = struct.pack("<i", len(value)) + b"".join(struct.pack("<i", _coerce_s32(v, field_type="EnumArray")) for v in value)
         return None, blob
     if type_name == "Vector2":
         return None, struct.pack("<ff", float(value["x"]), float(value["y"]))
@@ -620,8 +638,15 @@ def load_progress_sav(data, hash_to_name):
     if len(data) < 32:
         raise ConversionError("File is too small to be a valid progress.sav.")
     magic1, magic2, data_block_start = struct.unpack_from("<iii", data, 0)
-    if magic1 != MAGIC1 or magic2 != MAGIC2:
-        raise ConversionError("This doesn't look like a valid TOTK progress.sav (header mismatch).")
+    if magic1 != MAGIC1:
+        raise ConversionError("This doesn't look like a valid TOTK progress.sav (primary header mismatch).")
+    # v7.50: do not require the old server schema marker/size. Real Switch
+    # hardware samples can carry a newer schema marker and a larger file while
+    # retaining the same SaveServerBinaryLoader table/pointer structure.
+    if data_block_start < 32 or data_block_start > len(data) or (data_block_start - 32) % 8:
+        raise ConversionError(
+            "This progress.sav has an invalid data-table boundary; it cannot be safely decoded."
+        )
 
     value_count = (data_block_start - 32) // 8
     maps = {t: {} for t in ALL_TYPES}
@@ -674,16 +699,12 @@ def _ktml_value_text(value, indent):
 
 
 def _normalize_server_maps(maps):
-    """Return a server-safe copy of parsed KTML maps.
-
-    Kirbymimi's KTML loader distinguishes JSON-style integer numbers (Long)
-    from decimal numbers (Double).  In integer sections, ``123.0`` therefore
-    cannot be allowed even though it is numerically integral.  Normalize all
-    integer/64-bit sections before serializing so Java receives Long values.
-    """
+    """Return KTML maps using the numeric representations Kirbymimi's Java loader expects."""
     out = {}
-    integer_scalars = {"Int", "Enum", "UInt", "Int64", "UInt64"}
-    integer_arrays = {"IntArray", "EnumArray", "UIntArray", "Int64Array", "UInt64Array", "Bool64bitKey"}
+    int_scalars = {"Int", "Enum", "UInt"}
+    int_arrays = {"IntArray", "EnumArray", "UIntArray"}
+    long_scalars = {"Int64", "UInt64"}
+    long_arrays = {"Int64Array", "UInt64Array", "Bool64bitKey"}
 
     def as_int(value, label):
         if isinstance(value, bool):
@@ -704,6 +725,19 @@ def _normalize_server_maps(maps):
                 pass
         raise ConversionError(f"{label} requires an integer, got {value!r}")
 
+    def as_java_long(value, label):
+        n = as_int(value, label)
+        if n < -0x8000000000000000 or n > 0xFFFFFFFFFFFFFFFF:
+            raise ConversionError(
+                f"{label} is outside the supported 64-bit range "
+                f"(-9223372036854775808 through 18446744073709551615)."
+            )
+        # Preserve the low 64 bits but WRITE a signed Java-Long-range decimal.
+        # Kirbymimi's KTML parser otherwise promotes > Long.MAX_VALUE to Double;
+        # Bool64bitKey then does a direct (Long) cast and crashes.
+        n &= 0xFFFFFFFFFFFFFFFF
+        return n - 0x10000000000000000 if n >= 0x8000000000000000 else n
+
     for type_name, field_map in (maps or {}).items():
         if not isinstance(field_map, dict):
             out[type_name] = field_map
@@ -711,9 +745,15 @@ def _normalize_server_maps(maps):
         dst = {}
         for key, value in field_map.items():
             label = f"{type_name}.{key}"
-            if type_name in integer_scalars:
+            if type_name in long_scalars:
+                value = as_java_long(value, label)
+            elif type_name in int_scalars:
                 value = as_int(value, label)
-            elif type_name in integer_arrays:
+            elif type_name in long_arrays:
+                if not isinstance(value, list):
+                    raise ConversionError(f"{label} must be an array")
+                value = [as_java_long(v, f"{label}[{i}]") for i, v in enumerate(value)]
+            elif type_name in int_arrays:
                 if not isinstance(value, list):
                     raise ConversionError(f"{label} must be an array")
                 value = [as_int(v, f"{label}[{i}]") for i, v in enumerate(value)]
@@ -736,14 +776,87 @@ def maps_to_ktml_text(maps):
     return "\n".join(lines) + "\n"
 
 
+def analyze_progress_sav(sav_bytes, server_schema_maps=None):
+    """Analyze a progress.sav without modifying it.
+
+    v7.50 recognizes both the historical server/export layout and structurally
+    valid newer Nintendo Switch layouts.  Classification is based on the real
+    binary header/table and decoded field set, never the filename alone.
+    """
+    data = bytes(sav_bytes)
+    if len(data) < 32:
+        raise ConversionError("File is too small to be a valid progress.sav.")
+    magic1, schema_marker, data_block_start = struct.unpack_from("<iii", data, 0)
+    if magic1 != MAGIC1:
+        raise ConversionError("This doesn't look like a valid TOTK progress.sav (primary header mismatch).")
+    if data_block_start < 32 or data_block_start > len(data) or (data_block_start - 32) % 8:
+        raise ConversionError("Invalid progress.sav table boundary.")
+    name_to_hash = _load_name_to_hash()
+    maps = load_progress_sav(data, {v: k for k, v in name_to_hash.items()})
+    total_fields = sum(len(v) for v in maps.values() if isinstance(v, dict))
+    unknown = []
+    for type_name, field_map in maps.items():
+        if isinstance(field_map, dict):
+            unknown.extend((type_name, k) for k in field_map if k.startswith("unk") and k not in name_to_hash)
+    standard = schema_marker == MAGIC2 and len(data) == FILE_SIZE
+    report = {
+        "input_bytes": len(data),
+        "primary_magic": f"0x{magic1 & 0xffffffff:08X}",
+        "schema_marker": f"0x{schema_marker & 0xffffffff:08X}",
+        "data_block_start": data_block_start,
+        "table_entries": (data_block_start - 32) // 8,
+        "decoded_fields": total_fields,
+        "save_type": "Compatible / Server Save Layout" if standard else "Vanilla Nintendo Switch / Newer Save Layout",
+        "save_version": "Server-compatible legacy schema" if standard else "Newer save schema (exact game version not encoded here)",
+        "conversion_required": not standard,
+        "unknown_hash_fields": len(unknown),
+        "unknown_hash_field_names": [f"{t}.{k}" for t, k in unknown[:50]],
+        "maps": maps,
+    }
+    if server_schema_maps is not None:
+        supported = normalized = defaulted = 0
+        unsupported = []
+        for type_name in ALL_TYPES:
+            src = maps.get(type_name, {}) if isinstance(maps.get(type_name, {}), dict) else {}
+            schema = server_schema_maps.get(type_name, {}) if isinstance(server_schema_maps.get(type_name, {}), dict) else {}
+            for key in src:
+                if key in schema: supported += 1
+                else: unsupported.append(f"{type_name}.{key}")
+            for key in schema:
+                if key not in src: defaulted += 1
+        report.update({
+            "server_schema_supported_fields": supported,
+            "server_schema_defaulted_fields": defaulted,
+            "server_schema_unsupported_fields": len(unsupported),
+            "server_schema_unsupported_names": unsupported[:100],
+        })
+    return report
+
+
+def progress_sav_to_ktml_with_report(sav_bytes):
+    report = analyze_progress_sav(sav_bytes)
+    maps = report.pop("maps")
+    text = maps_to_ktml_text(maps)
+    # Parse our own output again. This catches serializer/type regressions before
+    # a file is reported as converted.
+    parsed = parse_ktml(text)
+    report.update({
+        "vanilla_save_parsed": True,
+        "type_normalization": True,
+        "ktml_generated": True,
+        "ktml_validation": True,
+        "generated_fields": sum(len(v) for v in parsed.values() if isinstance(v, dict)),
+        "server_compatibility_validation": "KTML structure/type validation passed; live server workflow requires runtime test",
+    })
+    return text, report
+
+
 def progress_sav_to_ktml(sav_bytes):
     """Convert progress.sav bytes to KTML text. No template file is
     needed: field names come from the same authoritative name2hash.ktml
     table (used in reverse), and every field's type/structure is read
     directly from the save's own type-boundary markers -- mirroring
     SaveServerBinaryLoader + SaveServerKTMLExporter exactly."""
-    name_to_hash = _load_name_to_hash()
-    hash_to_name = {v: k for k, v in name_to_hash.items()}
-    maps = load_progress_sav(sav_bytes, hash_to_name)
-    return maps_to_ktml_text(maps)
+    text, _report = progress_sav_to_ktml_with_report(sav_bytes)
+    return text
 
