@@ -1,7 +1,7 @@
 # 🟢 Sacred Zonai Realms
 ## Tears of the Kingdom v1.2.1 Save Converter — All-In-One
 
-**Current Version:** v7.26  
+**Current Version:** v8.30  
 **Developer:** ThyHeroOfTime / Legendary Savage Gamer  
 **Target Game Version:** Tears of the Kingdom v1.2.1  
 **Platform:** Windows
